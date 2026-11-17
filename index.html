@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watchlist</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a21; --line: #262b35; --text: #d6dae2;
+    --muted: #7c8494; --accent: #2962ff; --hover: #1d222b; --danger: #ef5350;
+  }
+  body.light {
+    --bg: #f4f5f7; --panel: #ffffff; --line: #e1e4ea; --text: #1d2330;
+    --muted: #6b7385; --accent: #2962ff; --hover: #eef1f6; --danger: #d32f2f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column;
+  }
+
+  /* ---------- Kopfzeile ---------- */
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
+  header form { display: flex; gap: 6px; }
+  input, select, button, textarea {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+  }
+  input { width: 200px; text-transform: uppercase; }
+  input::placeholder { text-transform: none; }
+  button { cursor: pointer; background: var(--hover); }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .spacer { flex: 1; }
+  .hint { color: var(--muted); font-size: 12px; }
+
+  /* ---------- Hauptbereich ---------- */
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 340px 1fr; }
+  #list {
+    list-style: none; margin: 0; padding: 0; overflow-y: auto;
+    border-right: 1px solid var(--line); background: var(--panel);
+  }
+  .row { position: relative; height: 112px; border-bottom: 1px solid var(--line); }
+  .row.active { box-shadow: inset 3px 0 0 var(--accent); background: var(--hover); }
+  .row .w { position: absolute; inset: 0; }
+  .row .placeholder {
+    padding: 14px 16px; color: var(--muted); font-weight: 600; letter-spacing: .3px;
+  }
+  /* durchsichtige Klickfläche über dem Mini-Chart: Klick lädt den großen Chart */
+  .row .hit { position: absolute; inset: 0; cursor: pointer; z-index: 2; }
+  .row:hover .hit { background: rgba(127,127,127,.06); }
+  .row .tools {
+    position: absolute; top: 6px; right: 6px; z-index: 3; display: none; gap: 3px;
+  }
+  .row:hover .tools, .row.active .tools { display: flex; }
+  .tools button { padding: 1px 7px; font-size: 12px; line-height: 18px; }
+  .tools button.del:hover { color: var(--danger); border-color: var(--danger); }
+
+  #chartwrap { position: relative; min-width: 0; min-height: 0; }
+  #chart { position: absolute; inset: 0; }
+  .empty { padding: 30px; color: var(--muted); }
+
+  footer {
+    padding: 4px 12px; font-size: 11px; color: var(--muted);
+    border-top: 1px solid var(--line); background: var(--panel);
+  }
+  footer a { color: var(--muted); }
+
+  /* ---------- Dialog "Liste bearbeiten" ---------- */
+  dialog {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; width: min(520px, 92vw); padding: 18px;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.5); }
+  dialog textarea { width: 100%; height: 320px; text-transform: uppercase; font-family: ui-monospace, monospace; }
+  dialog .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+  dialog p { margin: 0 0 10px; }
+
+  #toast {
+    position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+    background: var(--accent); color: #fff; padding: 8px 14px; border-radius: 6px;
+    opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ---------- Handy / schmale Fenster ---------- */
+  @media (max-width: 820px) {
+    main { display: flex; flex-direction: column; }
+    #chartwrap { order: -1; height: 62vh; flex: none; }
+    #list { border-right: none; }
+    input { width: 150px; }
+    .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Watchlist</h1>
+  <form id="addform" autocomplete="off">
+    <input id="addinput" placeholder="z. B. NASDAQ:AAPL" aria-label="Symbol hinzufügen">
+    <button class="primary" type="submit">+ Hinzufügen</button>
+  </form>
+  <span class="hint">Format: BÖRSE:KÜRZEL (NASDAQ, NYSE, XETR, EURONEXT, LSE …)</span>
+  <span class="spacer"></span>
+  <select id="interval" title="Standard-Zeiteinheit für den Chart">
+    <option value="1">1 Min</option>
+    <option value="5">5 Min</option>
+    <option value="15">15 Min</option>
+    <option value="60">1 Std</option>
+    <option value="240">4 Std</option>
+    <option value="D">Tag</option>
+    <option value="W">Woche</option>
+  </select>
+  <button id="editbtn" type="button">Liste bearbeiten</button>
+  <button id="linkbtn" type="button" title="Link mit deiner Liste kopieren (für Handy / anderen PC)">Link kopieren</button>
+  <button id="themebtn" type="button" title="Hell/Dunkel">◐</button>
+</header>
+
+<main>
+  <ul id="list"></ul>
+  <div id="chartwrap"><div id="chart"></div></div>
+</main>
+
+<footer>
+  Kurse und Charts: <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a>-Widgets
+  (je nach Börse Echtzeit oder ca. 15 Min verzögert).
+</footer>
+
+<dialog id="editdlg">
+  <form method="dialog" id="editform">
+    <p><b>Liste bearbeiten</b><br><span class="hint">Ein Symbol pro Zeile. Reihenfolge = Reihenfolge in der Liste.</span></p>
+    <textarea id="edittext" spellcheck="false"></textarea>
+    <div class="btns">
+      <button type="button" id="resetbtn" title="Auf die Standardliste zurücksetzen">Standard</button>
+      <span class="spacer"></span>
+      <button value="cancel">Abbrechen</button>
+      <button class="primary" value="save">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+
+<script>
+/* =====================================================================
+   STANDARD-WATCHLIST
+   Wird nur benutzt, solange im Browser noch keine eigene Liste gespeichert
+   ist. Änderungen auf der Seite selbst werden im Browser gespeichert.
+   ===================================================================== */
+const DEFAULT_LIST = [
+  "NASDAQ:GOOG",      // Alphabet C
+  "EURONEXT:WKL",     // Wolters Kluwer
+  "NYSE:BRK.B",       // Berkshire Hathaway B
+  "NYSE:APH",         // Amphenol
+  "NASDAQ:AVGO",      // Broadcom
+  "NASDAQ:LIN",       // Linde
+  "XETR:DB1",         // Deutsche Börse
+  "NASDAQ:MSFT",      // Microsoft
+  "EURONEXT:RMS",     // Hermès
+  "NYSE:VST",         // Vistra
+  "NASDAQ:CPRT",      // Copart
+  "NYSE:DHR",         // Danaher
+  "NYSE:WM",          // Waste Management
+  "NASDAQ:NNE",       // Nano Nuclear Energy
+  "NYSE:IOT",         // Samsara
+  "NASDAQ:VRSN",      // Verisign
+  "XETR:ALV",         // Allianz
+  "NYSE:SYK",         // Stryker
+  "NYSE:MCD",         // McDonald's
+  "NYSE:NKE",         // Nike
+  "NYSE:PG",          // Procter & Gamble
+  "NYSE:ORCL",        // Oracle
+  "LSE:SMSN",         // Samsung GDR
+  "LSE:GAW"           // Games Workshop
+];
+
+const LS_LIST = "watchlist.list.v1";
+const LS_SET  = "watchlist.settings.v1";
+const TV = "https://s3.tradingview.com/external-embedding/";
+
+let list = [];
+let settings = { theme: "dark", interval: "D", active: null };
+
+/* ---------- Speichern / Laden ---------- */
+function clean(sym) {
+  return String(sym || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+function uniq(arr) {
+  const seen = new Set(); const out = [];
+  for (const s of arr.map(clean)) if (s && !seen.has(s)) { seen.add(s); out.push(s); }
+  return out;
+}
+function fromHash() {
+  const h = decodeURIComponent(location.hash.replace(/^#/, ""));
+  return h ? uniq(h.split(",")) : null;
+}
+function load() {
+  try { Object.assign(settings, JSON.parse(localStorage.getItem(LS_SET) || "{}")); } catch (e) {}
+  const h = fromHash();
+  if (h && h.length) { list = h; return; }
+  try {
+    const stored = JSON.parse(localStorage.getItem(LS_LIST) || "null");
+    if (Array.isArray(stored) && stored.length) { list = uniq(stored); return; }
+  } catch (e) {}
+  list = DEFAULT_LIST.slice();
+}
+function save() {
+  try {
+    localStorage.setItem(LS_LIST, JSON.stringify(list));
+    localStorage.setItem(LS_SET, JSON.stringify(settings));
+  } catch (e) {}
+  // Liste steht auch im Link -> als Lesezeichen speicherbar, auf jedem Gerät
+  history.replaceState(null, "", "#" + list.join(","));
+}
+
+/* ---------- TradingView-Widget einbauen ---------- */
+function mountWidget(host, file, config) {
+  host.innerHTML = "";
+  const box = document.createElement("div");
+  box.className = "tradingview-widget-container";
+  box.style.cssText = "height:100%;width:100%";
+  const inner = document.createElement("div");
+  inner.className = "tradingview-widget-container__widget";
+  inner.style.cssText = "height:100%;width:100%";
+  box.appendChild(inner);
+  const s = document.createElement("script");
+  s.type = "text/javascript";
+  s.src = TV + file;
+  s.async = true;
+  s.innerHTML = JSON.stringify(config);
+  box.appendChild(s);
+  host.appendChild(box);
+}
+function tvTheme() { return settings.theme === "light" ? "light" : "dark"; }
+
+function mountMini(host, sym) {
+  mountWidget(host, "embed-widget-mini-symbol-overview.js", {
+    symbol: sym, width: "100%", height: "100%", autosize: true,
+    locale: "de_DE", dateRange: "1D", colorTheme: tvTheme(),
+    isTransparent: true, noTimeScale: true, chartOnly: false, largeChartUrl: ""
+  });
+}
+
+function showChart(sym) {
+  const host = document.getElementById("chart");
+  if (!sym) { host.innerHTML = '<div class="empty">Liste ist leer – oben ein Symbol hinzufügen.</div>'; return; }
+  settings.active = sym; save();
+  document.querySelectorAll(".row").forEach(r => r.classList.toggle("active", r.dataset.sym === sym));
+  mountWidget(host, "embed-widget-advanced-chart.js", {
+    autosize: true, symbol: sym, interval: settings.interval,
+    timezone: "Europe/Berlin", theme: tvTheme(), style: "1", locale: "de_DE",
+    allow_symbol_change: true, hide_side_toolbar: false, withdateranges: true,
+    save_image: true, details: false, calendar: false,
+    support_host: "https://www.tradingview.com"
+  });
+}
+
+/* ---------- Liste zeichnen (Mini-Charts laden erst, wenn sichtbar) ---------- */
+const observer = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (e.isIntersecting && !e.target.dataset.loaded) {
+      e.target.dataset.loaded = "1";
+      mountMini(e.target.querySelector(".w"), e.target.dataset.sym);
+      observer.unobserve(e.target);
+    }
+  }
+}, { root: document.getElementById("list"), rootMargin: "300px" });
+
+function renderList() {
+  observer.disconnect();
+  const ul = document.getElementById("list");
+  ul.innerHTML = "";
+  list.forEach((sym, i) => {
+    const li = document.createElement("li");
+    li.className = "row" + (sym === settings.active ? " active" : "");
+    li.dataset.sym = sym;
+    li.innerHTML =
+      '<div class="w"><div class="placeholder"></div></div>' +
+      '<div class="hit" title="Im großen Chart öffnen"></div>' +
+      '<div class="tools">' +
+        '<button class="up" title="nach oben">▲</button>' +
+        '<button class="down" title="nach unten">▼</button>' +
+        '<button class="del" title="entfernen">✕</button>' +
+      '</div>';
+    li.querySelector(".placeholder").textContent = sym;
+    li.querySelector(".hit").onclick = () => {
+      showChart(sym);
+      if (window.innerWidth <= 820) window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    li.querySelector(".up").onclick = () => move(i, -1);
+    li.querySelector(".down").onclick = () => move(i, +1);
+    li.querySelector(".del").onclick = () => removeSym(sym);
+    ul.appendChild(li);
+    observer.observe(li);
+  });
+}
+
+/* ---------- Aktionen ---------- */
+function addSym(raw) {
+  const sym = clean(raw);
+  if (!sym) return;
+  if (!list.includes(sym)) { list.push(sym); save(); renderList(); toast(sym + " hinzugefügt"); }
+  showChart(sym);
+  const row = document.querySelector('.row[data-sym="' + CSS.escape(sym) + '"]');
+  if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function removeSym(sym) {
+  list = list.filter(s => s !== sym);
+  save(); renderList();
+  if (settings.active === sym) showChart(list[0] || null);
+  toast(sym + " entfernt");
+}
+function move(i, d) {
+  const j = i + d;
+  if (j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  save(); renderList();
+}
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1600);
+}
+function applyTheme() { document.body.classList.toggle("light", settings.theme === "light"); }
+
+/* ---------- Bedienelemente ---------- */
+document.getElementById("addform").addEventListener("submit", e => {
+  e.preventDefault();
+  const inp = document.getElementById("addinput");
+  addSym(inp.value); inp.value = "";
+});
+
+const intervalSel = document.getElementById("interval");
+intervalSel.addEventListener("change", () => {
+  settings.interval = intervalSel.value; save(); showChart(settings.active);
+});
+
+document.getElementById("themebtn").onclick = () => {
+  settings.theme = settings.theme === "light" ? "dark" : "light";
+  save(); applyTheme(); renderList(); showChart(settings.active);
+};
+
+document.getElementById("linkbtn").onclick = async () => {
+  save();
+  try { await navigator.clipboard.writeText(location.href); toast("Link kopiert – als Lesezeichen speichern"); }
+  catch (e) { prompt("Diesen Link kopieren:", location.href); }
+};
+
+const dlg = document.getElementById("editdlg");
+document.getElementById("editbtn").onclick = () => {
+  document.getElementById("edittext").value = list.join("\n");
+  dlg.showModal();
+};
+document.getElementById("resetbtn").onclick = () => {
+  document.getElementById("edittext").value = DEFAULT_LIST.join("\n");
+};
+dlg.addEventListener("close", () => {
+  if (dlg.returnValue !== "save") return;
+  const next = uniq(document.getElementById("edittext").value.split(/[\n,;]+/));
+  list = next; save(); renderList();
+  if (!list.includes(settings.active)) settings.active = list[0] || null;
+  showChart(settings.active);
+  toast("Liste gespeichert");
+});
+
+window.addEventListener("hashchange", () => {
+  const h = fromHash();
+  if (h && h.join(",") !== list.join(",")) { list = h; save(); renderList(); showChart(list[0] || null); }
+});
+
+/* ---------- Start ---------- */
+load();
+applyTheme();
+intervalSel.value = settings.interval;
+if (!list.includes(settings.active)) settings.active = list[0] || null;
+save();
+renderList();
+showChart(settings.active);
+</script>
+</body>
+</html>
